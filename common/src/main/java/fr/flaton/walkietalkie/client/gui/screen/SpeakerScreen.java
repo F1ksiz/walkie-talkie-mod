@@ -10,6 +10,7 @@ import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.text.Text;
@@ -26,7 +27,9 @@ public class SpeakerScreen extends HandledScreen<SpeakerScreenHandler> {
     private int guiTop;
 
     private ToggleImageButton activateButton;
-    private Text canalText = Text.literal("");
+    private TextFieldWidget frequencyField;
+    private int pendingFrequency;
+    private int originalFrequency;
 
     public SpeakerScreen(SpeakerScreenHandler handler, PlayerInventory inventory, Text title) {
         super(handler, inventory, title);
@@ -39,8 +42,22 @@ public class SpeakerScreen extends HandledScreen<SpeakerScreenHandler> {
         drawCenteredText(context, this.textRenderer, title.getString(), this.width / 2, guiTop + 7, 4210752);
 
         updateActivateState();
+    }
 
-        drawCenteredText(context, this.textRenderer, String.valueOf(handler.getCanal()), this.width / 2, guiTop + 26, 4210752);
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (frequencyField.isFocused()) {
+            return frequencyField.keyPressed(keyCode, scanCode, modifiers) || super.keyPressed(keyCode, scanCode, modifiers);
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
+    public boolean charTyped(char chr, int modifiers) {
+        if (frequencyField.isFocused()) {
+            return frequencyField.charTyped(chr, modifiers);
+        }
+        return super.charTyped(chr, modifiers);
     }
 
     protected void drawCenteredText(DrawContext context, TextRenderer textRenderer, String text, int centerX, int y, int color) {
@@ -67,14 +84,61 @@ public class SpeakerScreen extends HandledScreen<SpeakerScreenHandler> {
         this.guiLeft = (this.width - xSize) / 2;
         this.guiTop = (this.height - ySize) / 2;
 
-        activateButton = new ToggleImageButton(guiLeft + 6, guiTop + ySize - 6 - 20, ACTIVATE_TEXTURE, button -> sendUpdateSpeaker(0, false), handler.isActivate());
+        activateButton = new ToggleImageButton(guiLeft + 6, guiTop + ySize - 6 - 20, ACTIVATE_TEXTURE, button -> {
+            // Сохраняем частоту перед переключением activate
+            if (pendingFrequency != originalFrequency) {
+                sendUpdateFrequency(pendingFrequency);
+                originalFrequency = pendingFrequency;
+            }
+            sendUpdateSpeaker(0, false);
+        }, handler.isActivate());
         this.addDrawableChild(activateButton);
 
-        this.addDrawableChild(ButtonWidget.builder(Text.literal(">"), button -> sendUpdateSpeaker(1, true)).dimensions(this.width / 2 - 10 + 40, guiTop + 20, 20, 20).build());
+        // Frequency text field
+        originalFrequency = handler.getCanal();
+        pendingFrequency = originalFrequency;
+        
+        frequencyField = new TextFieldWidget(this.textRenderer, this.width / 2 - 30, guiTop + 22, 60, 16, Text.literal(""));
+        frequencyField.setMaxLength(6);
+        frequencyField.setText(String.format("%.1f", originalFrequency / 10.0));
+        frequencyField.setChangedListener(this::onFrequencyChanged);
+        this.addDrawableChild(frequencyField);
 
-        this.addDrawableChild(ButtonWidget.builder(Text.literal("<"), button -> sendUpdateSpeaker(1, false)).dimensions(this.width / 2 - 10 - 40, guiTop + 20, 20, 20).build());
+        // Confirm button
+        this.addDrawableChild(ButtonWidget.builder(Text.translatable("gui.done"), button -> {
+            applyFrequency();
+            this.close();
+        }).dimensions(this.width / 2 - 50, guiTop + ySize - 6 - 20, 45, 20).build());
 
-        canalText = Text.literal(String.valueOf(handler.getCanal()));
+        // Cancel button
+        this.addDrawableChild(ButtonWidget.builder(Text.translatable("gui.cancel"), button -> {
+            this.close();
+        }).dimensions(this.width / 2 + 5, guiTop + ySize - 6 - 20, 45, 20).build());
+    }
+
+    private void onFrequencyChanged(String text) {
+        try {
+            double frequency = Double.parseDouble(text);
+            if (frequency >= 10.0 && frequency <= 1000.0) {
+                // Store pending frequency, don't send yet
+                pendingFrequency = (int) Math.round(frequency * 10.0);
+            }
+        } catch (NumberFormatException e) {
+            // Invalid input, ignore
+        }
+    }
+
+    private void applyFrequency() {
+        if (pendingFrequency != originalFrequency) {
+            sendUpdateFrequency(pendingFrequency);
+        }
+    }
+
+    @Override
+    public void removed() {
+        // Auto-save on close
+        applyFrequency();
+        super.removed();
     }
 
     private void sendUpdateSpeaker(int index, boolean status) {
@@ -82,6 +146,13 @@ public class SpeakerScreen extends HandledScreen<SpeakerScreenHandler> {
         buf.writeInt(index);
         buf.writeBoolean(status);
 
+        NetworkManager.sendToServer(ModMessages.UPDATE_SPEAKER_C2S, buf);
+    }
+
+    private void sendUpdateFrequency(int frequency) {
+        PacketByteBuf buf = new PacketByteBuf(Unpooled.buffer());
+        buf.writeInt(2); // New index for frequency update
+        buf.writeInt(frequency);
         NetworkManager.sendToServer(ModMessages.UPDATE_SPEAKER_C2S, buf);
     }
 

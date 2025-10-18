@@ -4,6 +4,9 @@ import de.maxhenkel.voicechat.api.*;
 import de.maxhenkel.voicechat.api.events.EventRegistration;
 import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
 import de.maxhenkel.voicechat.api.events.VoicechatServerStartedEvent;
+import de.maxhenkel.voicechat.api.opus.OpusDecoder;
+import de.maxhenkel.voicechat.api.opus.OpusEncoder;
+import fr.flaton.walkietalkie.audio.AudioProcessor;
 import fr.flaton.walkietalkie.block.entity.SpeakerBlockEntity;
 import fr.flaton.walkietalkie.config.ModConfig;
 import fr.flaton.walkietalkie.item.WalkieTalkieItem;
@@ -17,8 +20,8 @@ import org.jetbrains.annotations.Nullable;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.net.URL;
-import java.util.Enumeration;
-import java.util.Objects;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @ForgeVoicechatPlugin
 public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
@@ -27,6 +30,9 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
 
     @Nullable
     public static VoicechatServerApi api;
+    
+    // Audio processors per channel (UUID = channel ID)
+    private static final Map<UUID, AudioProcessor> audioProcessors = new ConcurrentHashMap<>();
 
     @Override
     public String getPluginId() {
@@ -104,8 +110,9 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
         }
 
         int senderCanal = getCanal(senderItemStack);
+        int senderRange = getRange(senderItemStack);
 
-        SpeakerBlockEntity.getSpeakersActivatedInRange(senderCanal, senderPlayer.getWorld(), senderPlayer.getPos(), getRange(senderItemStack))
+        SpeakerBlockEntity.getSpeakersActivatedInRange(senderCanal, senderPlayer.getWorld(), senderPlayer.getPos(), senderRange)
                 .forEach(speakerBlockEntity -> speakerBlockEntity.playSound(api, event));
 
         for (PlayerEntity receiverPlayer : Objects.requireNonNull(senderPlayer.getServer()).getPlayerManager().getPlayerList()) {
@@ -118,16 +125,20 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
                 continue;
             }
 
-            ItemStack receiverStack = Util.getWalkieTalkieActivated(receiverPlayer);
+            ItemStack receiverStack = Util.getWalkieTalkieInHand(receiverPlayer);
 
             if (receiverStack == null) {
                 continue;
             }
 
-            int receiverRange = getRange(receiverStack);
+            if (!isWalkieTalkieActivate(receiverStack)) {
+                continue;
+            }
+
             int receiverCanal = getCanal(receiverStack);
 
-            if (!canBroadcastToReceiver(senderPlayer, receiverPlayer, receiverRange)) {
+            // Use sender's range - transmission power determined by sender's radio
+            if (!canBroadcastToReceiver(senderPlayer, receiverPlayer, senderRange)) {
                 continue;
             }
 
@@ -169,5 +180,53 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
         World receiverWorld = receiverPlayer.getWorld();
 
         return Util.canBroadcastToReceiver(senderWorld, receiverWorld, senderPlayer.getPos(), receiverPlayer.getPos(), receiverRange);
+    }
+    
+    /**
+     * Apply low quality radio effect for speaker audio
+     * @param channelId The channel ID (for processor management)
+     * @param opusData Original opus-encoded audio data
+     * @return Processed opus-encoded audio data
+     */
+    public static byte[] applyLowQualityEffectForSpeaker(UUID channelId, byte[] opusData) {
+        if (api == null || !ModConfig.lowQualityAudio) {
+            return opusData;
+        }
+        
+        try {
+            // Get or create audio processor for this channel
+            AudioProcessor processor = audioProcessors.computeIfAbsent(channelId, k -> new AudioProcessor());
+            
+            // Get opus encoder/decoder from API
+            OpusEncoder encoder = api.createEncoder();
+            OpusDecoder decoder = api.createDecoder();
+            
+            if (encoder == null || decoder == null) {
+                return opusData;
+            }
+            
+            // Process audio with distance = 0 (no distance effect for speakers)
+            byte[] processed = processor.processOpusAudio(opusData, decoder, encoder, 0f);
+            
+            // Clean up
+            encoder.close();
+            decoder.close();
+            
+            return processed;
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+            return opusData;
+        }
+    }
+    
+    /**
+     * Clean up audio processor for a channel
+     */
+    public static void cleanupProcessor(UUID channelId) {
+        AudioProcessor processor = audioProcessors.remove(channelId);
+        if (processor != null) {
+            processor.reset();
+        }
     }
 }

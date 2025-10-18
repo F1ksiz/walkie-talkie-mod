@@ -24,6 +24,7 @@ public class ModConfig {
     public static int netheriteWalkieTalkieRange = 4096;
     public static boolean crossDimensionsEnabled = false;
     public static boolean applyDimensionScale = true;
+    public static boolean lowQualityAudio = true;
 
     public ModConfig(Path ConfigFolder) {
         this.CONFIG_FILE = new File(ConfigFolder.toString(), "WalkieTalkie.properties");
@@ -50,6 +51,7 @@ public class ModConfig {
                 netheriteWalkieTalkieRange = Integer.parseInt(properties.getProperty("netherite-walkie-talkie-range", "4096"));
                 crossDimensionsEnabled = Boolean.parseBoolean(properties.getProperty("cross-dimensions-enabled", "false"));
                 applyDimensionScale = Boolean.parseBoolean(properties.getProperty("apply-dimension-scale", "true"));
+                lowQualityAudio = Boolean.parseBoolean(properties.getProperty("low-quality-audio", "true"));
 
                 createConfig(mapConfig());
 
@@ -81,6 +83,8 @@ public class ModConfig {
         config.put("\n# Cross dimensions settings", "");
         config.put("cross-dimensions-enabled", String.valueOf(crossDimensionsEnabled));
         config.put("apply-dimension-scale", String.valueOf(applyDimensionScale));
+        config.put("\n# Audio settings", "");
+        config.put("low-quality-audio", String.valueOf(lowQualityAudio));
 
         return config;
     }

@@ -37,6 +37,11 @@ public class SpeakerScreenHandler extends ScreenHandler {
     public void setPropertyDelegate(boolean activate, int canal) {
         propertyDelegate.set(0, activate ? 1 : 0);
         propertyDelegate.set(1, canal);
+        
+        // Mark block entity as dirty to save changes
+        context.run((world, pos) -> {
+            world.markDirty(pos);
+        });
     }
 
     @Override

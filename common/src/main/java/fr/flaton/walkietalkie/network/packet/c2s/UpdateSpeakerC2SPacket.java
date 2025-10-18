@@ -14,7 +14,6 @@ public class UpdateSpeakerC2SPacket {
         ServerPlayerEntity player = (ServerPlayerEntity) packetContext.getPlayer();
 
         int index = packetByteBuf.readInt();
-        boolean status = packetByteBuf.readBoolean();
 
         ScreenHandler screenHandler = player.currentScreenHandler;
 
@@ -29,11 +28,11 @@ public class UpdateSpeakerC2SPacket {
 
             switch (index) {
                 case 0 -> activate = !activate;
-                case 1 -> {
-                    if (status) {
-                        canal = Util.loop(canal + 1, 1, ModConfig.maxCanal);
-                    } else {
-                        canal = Util.loop(canal - 1, 1, ModConfig.maxCanal);
+                case 2 -> {
+                    // Direct frequency update (stored as int * 10)
+                    int frequency = packetByteBuf.readInt();
+                    if (frequency >= 100 && frequency <= 10000) { // 10.0 to 1000.0
+                        canal = frequency;
                     }
                 }
             }

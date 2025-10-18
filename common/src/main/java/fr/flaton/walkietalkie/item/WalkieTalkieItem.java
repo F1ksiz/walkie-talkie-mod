@@ -56,7 +56,7 @@ public class WalkieTalkieItem extends Item {
             NbtCompound nbtCompound = new NbtCompound();
             nbtCompound.putBoolean(WalkieTalkieItem.NBT_KEY_ACTIVATE, false);
             nbtCompound.putBoolean(WalkieTalkieItem.NBT_KEY_MUTE, false);
-            nbtCompound.putInt(WalkieTalkieItem.NBT_KEY_CANAL, 1);
+            nbtCompound.putInt(WalkieTalkieItem.NBT_KEY_CANAL, 1000); // 100.0 MHz
             stack.setNbt(nbtCompound);
         }
 

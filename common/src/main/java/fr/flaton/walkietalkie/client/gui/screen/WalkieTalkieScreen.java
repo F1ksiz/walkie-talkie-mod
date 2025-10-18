@@ -11,6 +11,7 @@ import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.text.Text;
@@ -24,13 +25,16 @@ public class WalkieTalkieScreen extends Screen {
     private final int ySize = 76;
 
     private int guiLeft;
+    private int guiRight;
     private int guiTop;
 
     private final ItemStack stack;
 
     private ToggleImageButton mute;
     private ToggleImageButton activate;
-    private Text canal;
+    private TextFieldWidget frequencyField;
+    private int pendingFrequency;
+    private int originalFrequency;
 
     private static final Identifier BG_TEXTURE = new Identifier(Constants.MOD_ID, "textures/gui/gui_walkietalkie.png");
     private static final Identifier MUTE_TEXTURE = new Identifier("voicechat", "textures/icons/microphone_button.png");
@@ -48,27 +52,88 @@ public class WalkieTalkieScreen extends Screen {
     protected void init() {
         super.init();
         this.guiLeft = (this.width - xSize) / 2;
+        this.guiRight = (this.width + xSize) / 2;
         this.guiTop = (this.height - ySize) / 2;
 
-        mute = new ToggleImageButton(guiLeft + 6, guiTop + ySize - 6 - 20, MUTE_TEXTURE, button -> sendUpdateWalkieTalkie(2, false), stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_MUTE));
-        this.addDrawableChild(mute);
-
-        activate = new ToggleImageButton(guiLeft + 28, guiTop + ySize - 26, ACTIVATE_TEXTURE, button -> sendUpdateWalkieTalkie(0, false), stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_ACTIVATE));
+        activate = new ToggleImageButton(guiLeft + 6, guiTop + ySize - 26, ACTIVATE_TEXTURE, button -> {
+            // Сохраняем частоту перед переключением activate
+            if (pendingFrequency != originalFrequency) {
+                sendUpdateFrequency(pendingFrequency);
+                originalFrequency = pendingFrequency;
+            }
+            sendUpdateWalkieTalkie(0, false);
+        }, stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_ACTIVATE));
         this.addDrawableChild(activate);
 
+        mute = new ToggleImageButton(guiRight - 26, guiTop + ySize - 6 - 20, MUTE_TEXTURE, button -> {
+            // Сохраняем частоту перед переключением mute
+            if (pendingFrequency != originalFrequency) {
+                sendUpdateFrequency(pendingFrequency);
+                originalFrequency = pendingFrequency;
+            }
+            sendUpdateWalkieTalkie(2, false);
+        }, stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_MUTE));
+        this.addDrawableChild(mute);
 
-        this.addDrawableChild(ButtonWidget.builder(Text.literal(">"), button -> sendUpdateWalkieTalkie(1, true)).dimensions(this.width / 2 - 10 + 40, guiTop + 20, 20, 20).build());
+        // Frequency text field
+        originalFrequency = stack.getNbt().getInt(WalkieTalkieItem.NBT_KEY_CANAL);
+        pendingFrequency = originalFrequency;
+        
+        frequencyField = new TextFieldWidget(this.textRenderer, this.width / 2 - 30, guiTop + 22, 60, 16, Text.literal(""));
+        frequencyField.setMaxLength(6);
+        frequencyField.setText(String.format("%.1f", originalFrequency / 10.0));
+        frequencyField.setChangedListener(this::onFrequencyChanged);
+        this.addDrawableChild(frequencyField);
 
-        this.addDrawableChild(ButtonWidget.builder(Text.literal("<"), button -> sendUpdateWalkieTalkie(1, false)).dimensions(this.width / 2 - 10 - 40, guiTop + 20, 20, 20).build());
+        // Confirm button
+        this.addDrawableChild(ButtonWidget.builder(Text.translatable("gui.done"), button -> {
+            applyFrequency();
+            this.close();
+        }).dimensions(this.width / 2 - 48, guiTop + ySize - 6 - 20, 45, 20).build());
 
-        canal = Text.literal(String.valueOf(stack.getNbt().getInt(WalkieTalkieItem.NBT_KEY_CANAL)));
+        // Cancel button
+        this.addDrawableChild(ButtonWidget.builder(Text.translatable("gui.cancel"), button -> {
+            this.close();
+        }).dimensions(this.width / 2 + 3, guiTop + ySize - 6 - 20, 45, 20).build());
 
+    }
+
+    private void onFrequencyChanged(String text) {
+        try {
+            double frequency = Double.parseDouble(text);
+            if (frequency >= 10.0 && frequency <= 1000.0) {
+                // Store pending frequency, don't send yet
+                pendingFrequency = (int) Math.round(frequency * 10.0);
+            }
+        } catch (NumberFormatException e) {
+            // Invalid input, ignore
+        }
+    }
+
+    private void applyFrequency() {
+        if (pendingFrequency != originalFrequency) {
+            sendUpdateFrequency(pendingFrequency);
+        }
+    }
+
+    @Override
+    public void removed() {
+        // Auto-save on close
+        applyFrequency();
+        super.removed();
     }
 
     private void sendUpdateWalkieTalkie(int index, boolean status) {
         PacketByteBuf buf = new PacketByteBuf(Unpooled.buffer());
         buf.writeInt(index);
         buf.writeBoolean(status);
+        NetworkManager.sendToServer(ModMessages.UPDATE_WALKIETALKIE_C2S, buf);
+    }
+
+    private void sendUpdateFrequency(int frequency) {
+        PacketByteBuf buf = new PacketByteBuf(Unpooled.buffer());
+        buf.writeInt(3); // New index for frequency update
+        buf.writeInt(frequency);
         NetworkManager.sendToServer(ModMessages.UPDATE_WALKIETALKIE_C2S, buf);
     }
 
@@ -83,7 +148,22 @@ public class WalkieTalkieScreen extends Screen {
         this.renderBackground(context);
         super.render(context, mouseX, mouseY, delta);
         drawCenteredText(context, this.textRenderer, this.title, this.width / 2, guiTop + 7, 4210752);
-        drawCenteredText(context, this.textRenderer, this.canal, this.width / 2, guiTop + 26, 4210752);
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (frequencyField.isFocused()) {
+            return frequencyField.keyPressed(keyCode, scanCode, modifiers) || super.keyPressed(keyCode, scanCode, modifiers);
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
+    public boolean charTyped(char chr, int modifiers) {
+        if (frequencyField.isFocused()) {
+            return frequencyField.charTyped(chr, modifiers);
+        }
+        return super.charTyped(chr, modifiers);
     }
 
     protected void drawCenteredText(DrawContext context, TextRenderer textRenderer, Text text, int centerX, int y, int color) {
@@ -93,7 +173,19 @@ public class WalkieTalkieScreen extends Screen {
     public void updateButtons(ItemStack stack) {
         mute.setState(stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_MUTE));
         activate.setState(stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_ACTIVATE));
-        canal = Text.literal(String.valueOf(stack.getNbt().getInt(WalkieTalkieItem.NBT_KEY_CANAL)));
+        
+        // НЕ обновляем частоту если поле в фокусе (пользователь редактирует)
+        if (frequencyField != null && !frequencyField.isFocused()) {
+            int freqInt = stack.getNbt().getInt(WalkieTalkieItem.NBT_KEY_CANAL);
+            String newFreqText = String.format("%.1f", freqInt / 10.0);
+            
+            // Обновляем только если значение действительно изменилось
+            if (!frequencyField.getText().equals(newFreqText)) {
+                frequencyField.setText(newFreqText);
+                originalFrequency = freqInt;
+                pendingFrequency = freqInt;
+            }
+        }
     }
 
     public static WalkieTalkieScreen getInstance() {

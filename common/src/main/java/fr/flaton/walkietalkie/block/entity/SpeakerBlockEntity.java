@@ -87,6 +87,10 @@ public class SpeakerBlockEntity extends BlockEntity implements NamedScreenHandle
         super.readNbt(nbt);
         this.activated = nbt.getBoolean(NBT_KEY_ACTIVATE);
         this.canal = nbt.getInt(NBT_KEY_CANAL);
+        // Default to 100.0 MHz if not set
+        if (this.canal == 0) {
+            this.canal = 1000;
+        }
     }
 
     @Override
@@ -145,7 +149,21 @@ public class SpeakerBlockEntity extends BlockEntity implements NamedScreenHandle
                 this.channel.setFilter(serverPlayer -> !serverPlayer.getEntity().equals(event.getSenderConnection().getPlayer().getEntity()));
             }
         }
-        this.channel.send(event.getPacket().getOpusEncodedData());
+        
+        // Apply low quality radio effect to speaker audio
+        byte[] processedAudio = WalkieTalkieVoiceChatPlugin.applyLowQualityEffectForSpeaker(
+            this.channelId, 
+            event.getPacket().getOpusEncodedData()
+        );
+        this.channel.send(processedAudio);
+    }
+    
+    @Override
+    public void markRemoved() {
+        super.markRemoved();
+        // Cleanup audio processor when speaker is removed
+        WalkieTalkieVoiceChatPlugin.cleanupProcessor(this.channelId);
+        speakerBlockEntities.remove(this);
     }
 
     private boolean canBroadcastToSpeaker(World senderWorld, Vec3d senderPos, SpeakerBlockEntity speaker, int range) {

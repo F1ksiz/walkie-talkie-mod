@@ -20,7 +20,6 @@ public class UpdateWalkieTalkieC2SPacket {
         }
 
         int index = packetByteBuf.readInt();
-        boolean status = packetByteBuf.readBoolean();
 
         boolean activate = stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_ACTIVATE);
         boolean mute = stack.getNbt().getBoolean(WalkieTalkieItem.NBT_KEY_MUTE);
@@ -28,14 +27,14 @@ public class UpdateWalkieTalkieC2SPacket {
 
         switch (index) {
             case 0 -> activate = !activate;
-            case 1 -> {
-                if (status) {
-                    canal = Util.loop(canal + 1, 1, ModConfig.maxCanal);
-                } else {
-                    canal = Util.loop(canal - 1, 1, ModConfig.maxCanal);
+            case 2 -> mute = !mute;
+            case 3 -> {
+                // Direct frequency update (stored as int * 10)
+                int frequency = packetByteBuf.readInt();
+                if (frequency >= 100 && frequency <= 10000) { // 10.0 to 1000.0
+                    canal = frequency;
                 }
             }
-            case 2 -> mute = !mute;
         }
 
         stack.getNbt().putBoolean(WalkieTalkieItem.NBT_KEY_ACTIVATE, activate);
