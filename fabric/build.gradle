@@ -35,14 +35,27 @@ shadowJar {
     archiveClassifier.set("dev-shadow")
 }
 
+def getGitCommitHash() {
+    try {
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            commandLine 'git', 'rev-parse', '--short', 'HEAD'
+            standardOutput = stdout
+        }
+        return stdout.toString().trim()
+    } catch (ignored) {
+        return 'unknown'
+    }
+}
+
 remapJar {
     inputFile.set shadowJar.archiveFile
     dependsOn shadowJar
 
     if (minecraft_version == min_minecraft_version) {
-        archiveAppendix.set("fabric-${minecraft_version}")
+        archiveAppendix.set("fabric-${minecraft_version}-${getGitCommitHash()}")
     } else {
-        archiveAppendix.set("fabric-${min_minecraft_version}-${minecraft_version}")
+        archiveAppendix.set("fabric-${min_minecraft_version}-${minecraft_version}-${getGitCommitHash()}")
     }
 
     archiveClassifier.set(null)
@@ -51,56 +64,6 @@ remapJar {
 jar {
     archiveClassifier.set("dev")
 }
-
-curseforge {
-    apiKey = file("${rootDir}/curseforge_api_key.txt").exists() ? file("${rootDir}/curseforge_api_key.txt").text : ''
-    project {
-        id = "825621"
-        changelogType = 'markdown'
-        changelog = file("${rootDir}/changelog.md")
-        releaseType = release_type
-        addGameVersion minecraft_version
-        addGameVersion 'Fabric'
-        mainArtifact(remapJar) {
-            if (minecraft_version == min_minecraft_version) {
-                displayName = "[FABRIC][${minecraft_version}] Walkie-Talkie ${version}"
-            } else {
-                displayName = "[FABRIC][${min_minecraft_version}-${minecraft_version}] Walkie-Talkie ${version}"
-            }
-            relations {
-                requiredDependency 'simple-voice-chat'
-                requiredDependency 'architectury-api'
-                requiredDependency 'fabric-api'
-            }
-        }
-    }
-}
-
-tasks.modrinth.configure({
-    group = 'upload'
-})
-
-modrinth {
-    token = file("${rootDir}/modrinth_token.txt").exists() ? file("${rootDir}/modrinth_token.txt").text : ''
-    projectId = "yaRitiLw"
-    versionNumber = "fabric-${version}"
-    if (minecraft_version == min_minecraft_version) {
-        versionName = "[FABRIC][${minecraft_version}] Walkie-Talkie ${version}"
-    } else {
-        versionName = "[FABRIC][${min_minecraft_version}-${minecraft_version}] Walkie-Talkie ${version}"
-    }
-    uploadFile = remapJar
-    versionType = release_type.toUpperCase()
-    changelog = file("${rootDir}/changelog.md").text
-    gameVersions = [minecraft_version]
-    loaders = ['fabric']
-    dependencies {
-        required.project '9eGKb6K1' // simple-voice-chat
-        required.project 'lhGA9TYQ' // architectury-api
-        required.project 'P7dR8mSH' // fabric-api
-    }
-}
-tasks.modrinth.dependsOn(build)
 
 sourcesJar {
     def commonSources = project(":common").sourcesJar
