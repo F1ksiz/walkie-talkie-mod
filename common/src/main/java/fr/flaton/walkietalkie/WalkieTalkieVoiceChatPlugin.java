@@ -125,13 +125,9 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
                 continue;
             }
 
-            ItemStack receiverStack = Util.getWalkieTalkieInHand(receiverPlayer);
+            ItemStack receiverStack = Util.getWalkieTalkieActivated(receiverPlayer);
 
             if (receiverStack == null) {
-                continue;
-            }
-
-            if (!isWalkieTalkieActivate(receiverStack)) {
                 continue;
             }
 

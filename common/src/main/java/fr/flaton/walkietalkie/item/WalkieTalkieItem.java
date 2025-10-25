@@ -33,7 +33,8 @@ public class WalkieTalkieItem extends Item {
     public TypedActionResult<ItemStack> use(World world, PlayerEntity player, Hand hand) {
 
         if (world.isClient()) {
-            if (player.getStackInHand(hand).hasNbt()) {
+            // Only open GUI when in main hand
+            if (hand == Hand.MAIN_HAND && player.getStackInHand(hand).hasNbt()) {
 
                 ItemStack stack = player.getStackInHand(hand);
 

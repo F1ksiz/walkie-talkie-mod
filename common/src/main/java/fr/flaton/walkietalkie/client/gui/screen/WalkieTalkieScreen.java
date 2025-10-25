@@ -100,7 +100,7 @@ public class WalkieTalkieScreen extends Screen {
 
     private void onFrequencyChanged(String text) {
         try {
-            double frequency = Double.parseDouble(text);
+            double frequency = Double.parseDouble(text.replace(',', '.'));
             if (frequency >= 10.0 && frequency <= 1000.0) {
                 // Store pending frequency, don't send yet
                 pendingFrequency = (int) Math.round(frequency * 10.0);
