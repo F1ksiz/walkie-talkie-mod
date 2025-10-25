@@ -1,25 +1,26 @@
 package fr.flaton.walkietalkie;
 
 import de.maxhenkel.voicechat.api.*;
+import de.maxhenkel.voicechat.api.audiochannel.LocationalAudioChannel;
 import de.maxhenkel.voicechat.api.events.EventRegistration;
 import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent;
 import de.maxhenkel.voicechat.api.events.VoicechatServerStartedEvent;
 import de.maxhenkel.voicechat.api.opus.OpusDecoder;
 import de.maxhenkel.voicechat.api.opus.OpusEncoder;
 import fr.flaton.walkietalkie.audio.AudioProcessor;
+import fr.flaton.walkietalkie.audio.MilitaryRadioEffect;
 import fr.flaton.walkietalkie.block.entity.SpeakerBlockEntity;
 import fr.flaton.walkietalkie.config.ModConfig;
 import fr.flaton.walkietalkie.item.WalkieTalkieItem;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
-import net.minecraft.text.Text;
-import net.minecraft.text.TranslatableTextContent;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -33,6 +34,11 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
     
     // Audio processors per channel (UUID = channel ID)
     private static final Map<UUID, AudioProcessor> audioProcessors = new ConcurrentHashMap<>();
+
+    // Per sender->receiver stream channels and effects
+    private static final Map<String, LocationalAudioChannel> radioChannels = new ConcurrentHashMap<>();
+    private static final Map<String, MilitaryRadioEffect> radioEffects = new ConcurrentHashMap<>();
+    private static final Map<String, OpusEncoder> radioEncoders = new ConcurrentHashMap<>();
 
     @Override
     public String getPluginId() {
@@ -57,7 +63,6 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
         api.registerVolumeCategory(speakers);
     }
 
-    @Nullable
     private int[][] getIcon(String path) {
         try {
             Enumeration<URL> resources = WalkieTalkieVoiceChatPlugin.class.getClassLoader().getResources(path);
@@ -82,6 +87,10 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
             e.printStackTrace();
         }
         return null;
+    }
+
+    private static String pairKey(UUID sender, UUID receiver, int canal) {
+        return sender + ":" + receiver + ":" + canal;
     }
 
     private void onMicPacket(MicrophonePacketEvent event) {
@@ -112,43 +121,117 @@ public class WalkieTalkieVoiceChatPlugin implements VoicechatPlugin {
         int senderCanal = getCanal(senderItemStack);
         int senderRange = getRange(senderItemStack);
 
-        SpeakerBlockEntity.getSpeakersActivatedInRange(senderCanal, senderPlayer.getWorld(), senderPlayer.getPos(), senderRange)
-                .forEach(speakerBlockEntity -> speakerBlockEntity.playSound(api, event));
+        if (api != null) {
+            SpeakerBlockEntity.getSpeakersActivatedInRange(senderCanal, senderPlayer.getWorld(), senderPlayer.getPos(), senderRange)
+                    .forEach(speakerBlockEntity -> speakerBlockEntity.playSound(api, event));
+        }
+
+        if (!ModConfig.lowQualityAudio || api == null) {
+            return; // даём штатной пересылке идти
+        }
+
+        // Декодер один на пакет — декодирование не требует непрерывного состояния
+        OpusDecoder decoder = api.createDecoder();
+        if (decoder == null) {
+            return;
+        }
+
+        byte[] opusData = event.getPacket().getOpusEncodedData();
+        short[] basePcm;
+        try {
+            basePcm = decoder.decode(opusData);
+        } catch (Exception e) {
+            basePcm = null;
+        }
+        try { decoder.close(); } catch (Exception ignored) {}
+
+        if (basePcm == null || basePcm.length == 0) {
+            return;
+        }
+
+        final int FRAME_SIZE = 960; // 20ms @ 48kHz, mono
+        final boolean canSplit = (basePcm.length % FRAME_SIZE) == 0;
 
         for (PlayerEntity receiverPlayer : Objects.requireNonNull(senderPlayer.getServer()).getPlayerManager().getPlayerList()) {
-
             if (receiverPlayer.getUuid().equals(senderPlayer.getUuid())) {
                 continue;
             }
-
             if (!ModConfig.crossDimensionsEnabled && !receiverPlayer.getWorld().getDimension().equals(senderPlayer.getWorld().getDimension())) {
                 continue;
             }
-
             ItemStack receiverStack = Util.getWalkieTalkieActivated(receiverPlayer);
-
             if (receiverStack == null) {
                 continue;
             }
-
             int receiverCanal = getCanal(receiverStack);
-
-            // Use sender's range - transmission power determined by sender's radio
+            if (receiverCanal != senderCanal) {
+                continue;
+            }
             if (!canBroadcastToReceiver(senderPlayer, receiverPlayer, senderRange)) {
                 continue;
             }
 
-            if (receiverCanal != senderCanal) {
-                continue;
+            float p2pDistance = (float) Math.sqrt(senderPlayer.squaredDistanceTo(receiverPlayer));
+            float distanceFactor = senderRange > 0 ? (p2pDistance / (float) senderRange) : 1f;
+            if (distanceFactor < 0f) distanceFactor = 0f;
+            if (distanceFactor > 1f) distanceFactor = 1f;
+
+            // Канал per sender->receiver
+            String key = pairKey(senderPlayer.getUuid(), receiverPlayer.getUuid(), senderCanal);
+            LocationalAudioChannel channel = radioChannels.get(key);
+            if (channel == null) {
+                UUID channelId = UUID.nameUUIDFromBytes(("radio:" + key).getBytes(StandardCharsets.UTF_8));
+                Position pos = api.createPosition(senderPlayer.getX(), senderPlayer.getY(), senderPlayer.getZ());
+                channel = api.createLocationalAudioChannel(channelId, api.fromServerLevel(senderPlayer.getWorld()), pos);
+                if (channel == null) {
+                    continue;
+                }
+                channel.setCategory(SPEAKER_CATEGORY);
+                channel.setDistance(1_000_000F);
+                final UUID onlyReceiver = receiverPlayer.getUuid();
+                channel.setFilter(serverPlayer -> serverPlayer.getUuid().equals(onlyReceiver));
+                radioChannels.put(key, channel);
             }
 
-            // Send audio
-            VoicechatConnection connection = api.getConnectionOf(receiverPlayer.getUuid());
-            if (connection == null) {
-                continue;
+            // Эффект per pair для непрерывности между кадрами
+            MilitaryRadioEffect effect = radioEffects.computeIfAbsent(key, k -> new MilitaryRadioEffect());
+
+            // Энкодер per pair (сохраняем состояние между кадрами)
+            OpusEncoder encoder = radioEncoders.get(key);
+            if (encoder == null) {
+                encoder = api.createEncoder();
+                if (encoder == null) {
+                    continue;
+                }
+                radioEncoders.put(key, encoder);
             }
 
-            api.sendStaticSoundPacketTo(connection, event.getPacket().staticSoundPacketBuilder().build());
+            if (!canSplit) {
+                // Если пакет не кратен 20мс — безопаснее отправить как есть, чтобы не нарушать тайминг
+                channel.send(opusData);
+            } else {
+                for (int off = 0; off < basePcm.length; off += FRAME_SIZE) {
+                    short[] frame = Arrays.copyOfRange(basePcm, off, off + FRAME_SIZE);
+                    short[] processedPcm = effect.process(frame, distanceFactor);
+                    byte[] encoded;
+                    try {
+                        encoded = encoder.encode(processedPcm);
+                    } catch (Exception e) {
+                        encoded = opusData; // fallback
+                    }
+                    channel.send(encoded);
+                }
+            }
+
+            // Очистка по окончанию передачи для пары
+            if (!effect.isTransmitting()) {
+                radioEffects.remove(key);
+                OpusEncoder enc = radioEncoders.remove(key);
+                if (enc != null) {
+                    try { enc.close(); } catch (Exception ignored) {}
+                }
+                // Канал можно оставить в кэше или убрать по таймеру
+            }
         }
     }
 
